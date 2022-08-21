@@ -332,6 +332,129 @@ use in batch mode."
 
 (defalias 'org-clock-csv-batch 'org-clock-csv-batch-and-exit)
 
+(defun tomonacci-clock-test ()
+  "Run a linear algorithm for heading and clock entries export on
+the current buffer and write the result to *clock-entries-csv*."
+  (interactive)
+  (let* ((ast (org-element-parse-buffer 'element))
+         (headline-id 0)
+         ;; (id tags)
+         (headline-stack (list '(nil nil)))
+         (headline-level 0)
+         (entries
+          (org-element-map ast '(headline clock)
+            (lambda (e)
+              (cl-case (org-element-type e)
+                (headline
+                 (setq headline-id (1+ headline-id))
+                 ;; Adjust headline-level and headline-stack
+                 (let ((level (org-element-property :level e)))
+                   (progn
+                     (while (< level headline-level)
+                       (pop headline-stack)
+                       (setq headline-level (1- headline-level))
+                       )
+                     (while (< headline-level level)
+                       (push (car headline-stack) headline-stack)
+                       (setq headline-level (1+ headline-level))
+                       )
+                     ))
+                 (let* ((parent-id (caar headline-stack))
+                        (inherited-tags (cadar headline-stack))
+                        (self-tags
+                         (seq-map #'substring-no-properties (org-element-property :tags e)))
+                        (tags (delete-dups (append inherited-tags self-tags)))
+                        (task
+                         (if nil (org-element-property :raw-value e)
+                           (let ((beg (org-element-property :title-begin e))
+                                 (end (org-element-property :title-end e))
+                                 (result ""))
+                             (while (/= beg end)
+                               (if (invisible-p beg)
+                                   (setq beg (next-single-char-property-change beg 'invisible nil end))
+                                 (let ((next (next-single-char-property-change beg 'invisible nil end)))
+                                   (setq result (concat result (buffer-substring-no-properties beg next)))
+                                   (setq beg next))))
+                             result
+                             )))
+                        (effort (org-element-property :EFFORT e))
+                        (ishabit (when (equal "habit" (org-element-property
+                                                       :STYLE e))
+                                   "t"))
+                        (default-category "")
+                        (category (org-clock-csv--find-category e default-category))
+                        )
+                   (setq headline-level (1+ headline-level))
+                   ;; TODO: Handle tag inheritance, respecting the value of
+                   ;; `org-tags-exclude-from-inheritance'.
+                   (push (list headline-id tags) headline-stack)
+                   (list :type "headline"
+                         :id headline-id
+                         :parent-id (or parent-id :null)
+                         :task task
+                         :effort (or effort :null)
+                         :ishabit (or ishabit :false)
+                         :tags (apply 'vector tags)
+                         ))
+                 )
+                (clock
+                 (let ((element e))
+                   (when (and (equal (org-element-property :status element) 'closed)
+                              (equal (org-element-property
+                                      :type (org-element-property :value element))
+                                     'inactive-range))
+                     (let* ((timestamp (org-element-property :value element))
+                            (timestamp-plist
+                             (seq-mapcat
+                              (lambda (p) (list p (org-element-property p timestamp)))
+                              '(:year-start :month-start :day-start :hour-start :minute-start :year-end :month-end :day-end :hour-end :minute-end)))
+                            (duration (org-element-property :duration element)))
+                       (append
+                        (list :type "clock"
+                              :headline-id headline-id
+                              :duration duration
+                              )
+                        timestamp-plist
+                        ))))))
+              )
+            ))
+         )
+    (with-current-buffer (get-buffer-create "*clock-entries-csv*")
+      (goto-char 0)
+      (erase-buffer)
+      (seq-doseq (entry entries)
+        ;;(insert (format "%S\n" entry))
+        (insert (json-serialize entry) "\n")
+        )
+      ;;(goto-char (point-max))
+      ;;(prin1 ast (current-buffer))
+      (switch-to-buffer (current-buffer))
+      ))
+  nil)
+
+(defun org-clock-csv-current-buffer ()
+  "Run org-clock-csv on the current buffer, regardless of whether
+  the current buffer is associated with a file or not, and write
+  the result into a buffer named *clock-entries-csv*."
+  (interactive)
+  (let* ((buffer (get-buffer-create "*clock-entries-csv*"))
+         (entries
+          (let* ((ast (org-element-parse-buffer 'element))
+	         (title (org-clock-csv--get-org-data 'TITLE ast ""))
+	         (category (org-clock-csv--get-org-data 'CATEGORY ast "")))
+            (org-element-map ast 'clock
+              (lambda (c) (org-clock-csv--parse-element c title category))
+              nil nil))))
+    (with-current-buffer buffer
+      (goto-char 0)
+      (erase-buffer)
+      (insert org-clock-csv-header "\n")
+      (mapc (lambda (entry)
+              (insert (concat (funcall org-clock-csv-row-fmt entry) "\n")))
+            entries))
+    (switch-to-buffer buffer))
+  )
+
 (provide 'org-clock-csv)
 
 ;; Local Variables:
