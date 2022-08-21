@@ -249,7 +249,7 @@ When NO-CHECK is non-nil, skip checking if all files exist."
     (mapc (lambda (file) (cl-assert (file-exists-p file))) filelist))
   (cl-loop for file in filelist append
            (with-current-buffer (find-file-noselect file)
-	     (let* ((ast (org-element-parse-buffer))
+	     (let* ((ast (org-element-parse-buffer 'element))
 		    (title (org-clock-csv--get-org-data 'TITLE ast file))
 		    (category (org-clock-csv--get-org-data 'CATEGORY ast "")))
 	       (org-element-map ast 'clock
